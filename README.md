@@ -22,7 +22,7 @@ Pump (E1) -> Pipe -> Tank (E2)
 3. Run the POC:
 
    ```bash
-   python poc.py
+   python test.py
    ```
 
 ## Expected behavior
