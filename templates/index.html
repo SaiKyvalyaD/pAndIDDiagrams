@@ -1,0 +1,645 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>P&amp;ID Viewer</title>
+    <style>
+        :root {
+            --border: #e5e7eb;
+            --muted: #6b7280;
+            --accent: #1d4ed8;
+            --bg-subtle: #f9fafb;
+        }
+        body { font-family: system-ui, sans-serif; max-width: 960px; margin: 2rem auto; padding: 0 1rem; }
+        .err { color: #b91c1c; background: #fef2f2; padding: 0.75rem 1rem; border-radius: 6px; margin: 1rem 0; }
+        .note { color: #92400e; background: #fffbeb; padding: 0.75rem 1rem; border-radius: 6px; margin: 1rem 0; font-size: 0.9rem; }
+        .note.neutral { color: #374151; background: #f3f4f6; }
+        #preview { border: 1px solid var(--border); border-radius: 8px; padding: 1rem; background: #fafafa; overflow: auto; margin-top: 1rem; }
+        #preview svg { max-width: 100%; height: auto; display: block; }
+        #pdf-svg-direct-preview {
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 1rem;
+            background: #fafafa;
+            overflow: auto;
+            margin-top: 1rem;
+            max-height: 72vh;
+        }
+        #pdf-svg-direct-preview svg { max-width: 100%; height: auto; display: block; }
+        #pdf-svg-graph-preview {
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 1rem;
+            background: #fafafa;
+            overflow: auto;
+            margin-top: 1rem;
+            max-height: 72vh;
+        }
+        #pdf-svg-graph-preview svg { max-width: 100%; height: auto; display: block; }
+        .zoom-toolbar {
+            display: flex;
+            gap: 0.5rem;
+            align-items: center;
+            margin-top: 0.5rem;
+            flex-wrap: wrap;
+        }
+        .zoom-toolbar .zoom-state {
+            color: var(--muted);
+            font-size: 0.9rem;
+            min-width: 4rem;
+        }
+        #pdf-svg-object {
+            margin-top: 1rem;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 0.75rem 1rem;
+            background: #fff;
+            max-height: 420px;
+            overflow: auto;
+            font-size: 0.8rem;
+        }
+        button, .btn { margin-top: 0.5rem; margin-right: 0.5rem; padding: 0.5rem 1rem; cursor: pointer; }
+        .tabs { display: flex; gap: 0; border-bottom: 2px solid var(--border); margin: 1.25rem 0 0; flex-wrap: wrap; }
+        .tabs button {
+            margin: 0;
+            border: none;
+            background: transparent;
+            padding: 0.65rem 1rem;
+            font-size: 1rem;
+            color: var(--muted);
+            border-bottom: 2px solid transparent;
+            margin-bottom: -2px;
+        }
+        .tabs button:hover { color: #111827; }
+        .tabs button[aria-selected="true"] {
+            color: var(--accent);
+            font-weight: 600;
+            border-bottom-color: var(--accent);
+        }
+        .panel { display: none; padding-top: 1rem; }
+        .panel.active { display: block; }
+        .pipeline-intro {
+            font-size: 0.95rem;
+            color: #374151;
+            line-height: 1.5;
+            margin-bottom: 1rem;
+        }
+        .pipeline-flow {
+            font-family: ui-monospace, monospace;
+            font-size: 0.8rem;
+            background: var(--bg-subtle);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 0.75rem 1rem;
+            margin-bottom: 1rem;
+            overflow-x: auto;
+            white-space: pre;
+        }
+        .graph-form label, .pdf-form label { display: block; margin-top: 0.75rem; font-weight: 500; }
+        .graph-form input[type="file"], .pdf-form input[type="file"], .pdf-form input[type="number"] { margin-top: 0.35rem; }
+        #graph-status, #pdf-status { margin-top: 0.75rem; font-size: 0.9rem; color: var(--muted); }
+        #graph-results, #pdf-results { margin-top: 1rem; }
+        .pdf-row { display: flex; flex-wrap: wrap; gap: 1rem; align-items: flex-end; margin-top: 0.5rem; }
+        .pdf-row > div { flex: 1; min-width: 140px; }
+        #pdf-preview-wrap {
+            margin: 1rem 0;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 1rem;
+            background: #fafafa;
+            display: none;
+        }
+        #pdf-preview-wrap.visible { display: block; }
+        #pdf-preview-wrap img { max-width: 100%; height: auto; border-radius: 4px; }
+        #pdf-svg-wrap {
+            margin: 1rem 0;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 1rem;
+            background: #fafafa;
+            display: none;
+            overflow: auto;
+        }
+        #pdf-svg-wrap.visible { display: block; }
+        #pdf-svg-preview svg { max-width: 100%; height: auto; display: block; }
+        .ok { color: #15803d; font-weight: 600; }
+        .bad { color: #b91c1c; font-weight: 600; }
+        .step-card {
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            margin-bottom: 0.75rem;
+            overflow: hidden;
+        }
+        .step-card summary {
+            cursor: pointer;
+            padding: 0.65rem 1rem;
+            background: var(--bg-subtle);
+            font-weight: 600;
+            list-style: none;
+        }
+        .step-card summary::-webkit-details-marker { display: none; }
+        .step-card pre {
+            margin: 0;
+            padding: 0.75rem 1rem;
+            font-size: 0.78rem;
+            overflow-x: auto;
+            background: #fff;
+            border-top: 1px solid var(--border);
+            max-height: 420px;
+            overflow-y: auto;
+        }
+    </style>
+</head>
+<body>
+
+<h1>P&amp;ID Viewer</h1>
+<p>Upload DEXPI/Proteus XML, run the graph interpretation pipeline (POC), or convert a PDF page toward DEXPI / pyDEXPI — use the tabs below.</p>
+
+<div class="tabs" role="tablist">
+    <button type="button" role="tab" id="tab-viewer" aria-selected="true" aria-controls="panel-viewer">Diagram viewer</button>
+    <button type="button" role="tab" id="tab-pdf-svg" aria-selected="false" aria-controls="panel-pdf-svg">PDF → SVG</button>
+    <button type="button" role="tab" id="tab-graph" aria-selected="false" aria-controls="panel-graph">Graph interpretation</button>
+    <button type="button" role="tab" id="tab-pdf" aria-selected="false" aria-controls="panel-pdf">PDF → pyDEXPI</button>
+</div>
+
+<div id="panel-viewer" class="panel active" role="tabpanel" aria-labelledby="tab-viewer">
+<p>Upload a DEXPI/Proteus XML file. The diagram is rendered in memory (no files saved on the server).</p>
+
+{% if error %}
+<div class="err">{{ error }}</div>
+{% endif %}
+
+{% if note %}
+<div class="note"><strong>Note:</strong> pydexpi had an issue; output uses the minimal fallback renderer. {{ note }}</div>
+{% endif %}
+
+<h2>Upload XML</h2>
+<form method="POST" enctype="multipart/form-data">
+    <input type="file" name="xml_file" accept=".xml,text/xml,application/xml" required>
+    <button type="submit">Render</button>
+</form>
+
+{% if svg %}
+<hr>
+<h2>Rendered SVG</h2>
+<button type="button" class="btn" id="btn-download">Download SVG</button>
+<div id="preview">{{ svg|safe }}</div>
+<script>
+(function () {
+    var btn = document.getElementById("btn-download");
+    if (!btn) return;
+    btn.addEventListener("click", function () {
+        var wrap = document.getElementById("preview");
+        var svg = wrap && wrap.querySelector("svg");
+        if (!svg) return;
+        var xml = new XMLSerializer().serializeToString(svg);
+        var blob = new Blob([xml], { type: "image/svg+xml;charset=utf-8" });
+        var url = URL.createObjectURL(blob);
+        var a = document.createElement("a");
+        a.href = url;
+        a.download = "diagram.svg";
+        a.click();
+        URL.revokeObjectURL(url);
+    });
+})();
+</script>
+{% endif %}
+</div>
+
+<div id="panel-pdf-svg" class="panel" role="tabpanel" aria-labelledby="tab-pdf-svg" hidden>
+    <p>Upload a PDF and page number, extract that page as SVG, and render it with zoom controls.</p>
+    <form id="pdf-svg-form" class="pdf-form">
+        <label for="pdf_svg_file">P&amp;ID PDF</label>
+        <input type="file" id="pdf_svg_file" name="pdf_file" accept=".pdf,application/pdf" required>
+        <div class="pdf-row">
+            <div>
+                <label for="pdf_svg_page">Page number</label>
+                <input type="number" id="pdf_svg_page" name="page" value="1" min="1" step="1" required>
+            </div>
+        </div>
+        <button type="submit" class="btn">Extract SVG</button>
+    </form>
+    <div id="pdf-svg-status"></div>
+    <div id="pdf-svg-err" class="err" style="display:none;"></div>
+    <button type="button" class="btn" id="btn-download-pdf-svg" style="display:none;">Download SVG</button>
+    <div class="zoom-toolbar">
+        <button type="button" class="btn" id="pdf-svg-zoom-in">Zoom In</button>
+        <button type="button" class="btn" id="pdf-svg-zoom-out">Zoom Out</button>
+        <button type="button" class="btn" id="pdf-svg-zoom-reset">Reset</button>
+        <span class="zoom-state" id="pdf-svg-zoom-state">100%</span>
+    </div>
+    <div id="pdf-svg-direct-preview"></div>
+</div>
+
+<div id="panel-graph" class="panel" role="tabpanel" aria-labelledby="tab-graph" hidden>
+    <p class="pipeline-intro">
+        <strong>Pipeline (POC):</strong> P&amp;ID XML → structured graph → analytics → patterns → similarity (optional second file) → embedding → lightweight ML-style labels.
+    </p>
+    <div class="pipeline-flow">Upload XML A + XML B (optional)
+        ↓
+Convert → Graphs
+        ↓
+[1] Graph analysis
+        ↓
+[2] Subgraph extraction
+        ↓
+[3] Graph similarity (if B provided)
+        ↓
+[4] Embedding
+        ↓
+[5] Conceptual GNN / ML layer</div>
+
+    <form id="graph-form" class="graph-form">
+        <label for="xml_a">Diagram A (required)</label>
+        <input type="file" id="xml_a" name="xml_a" accept=".xml,text/xml,application/xml" required>
+
+        <label for="xml_b">Diagram B (optional — enables similarity)</label>
+        <input type="file" id="xml_b" name="xml_b" accept=".xml,text/xml,application/xml">
+
+        <div>
+            <button type="submit" class="btn">Run graph pipeline</button>
+        </div>
+    </form>
+    <div id="graph-status"></div>
+    <div id="graph-err" class="err" style="display:none;"></div>
+    <div id="graph-results"></div>
+</div>
+
+<div id="panel-pdf" class="panel" role="tabpanel" aria-labelledby="tab-pdf" hidden>
+    <form id="pdf-form" class="pdf-form">
+        <label for="pdf_file">P&amp;ID PDF</label>
+        <input type="file" id="pdf_file" name="pdf_file" accept=".pdf,application/pdf" required>
+
+        <div class="pdf-row">
+            <div>
+                <label for="page">Page number</label>
+                <input type="number" id="page" name="page" value="1" min="1" step="1" required>
+            </div>
+        </div>
+
+        <button type="submit" class="btn">Run pipeline</button>
+    </form>
+
+    <div id="pdf-status"></div>
+    <div id="pdf-err" class="err" style="display:none;"></div>
+
+    <div id="pdf-preview-wrap">
+        <strong>Rendered page</strong>
+        <div><img id="pdf-page-img" alt="PDF page raster"></div>
+    </div>
+
+    <div id="pdf-debug-wrap" style="margin:1rem 0; border:1px solid var(--border); border-radius:8px; padding:1rem; background:#fafafa; display:none;">
+        <strong>Detection debug overlay</strong>
+        <div><img id="pdf-debug-img" alt="Detected symbols and lines overlay" style="max-width:100%; height:auto; border-radius:4px;"></div>
+    </div>
+
+    <div id="pdf-svg-wrap">
+        <strong>Rendered SVG from XML</strong>
+        <div id="pdf-svg-preview"></div>
+    </div>
+
+    <div id="pydexpi-banner" class="note neutral" style="display:none;"></div>
+    <button type="button" class="btn" id="btn-pdf-xml" style="display:none;">Download XML</button>
+    <div id="pdf-results"></div>
+</div>
+
+<script>
+(function () {
+    var tabs = document.querySelectorAll('.tabs [role="tab"]');
+    var viewer = document.getElementById('panel-viewer');
+    var pdfSvgPanel = document.getElementById('panel-pdf-svg');
+    var graphPanel = document.getElementById('panel-graph');
+    var pdfPanel = document.getElementById('panel-pdf');
+
+    var tabToPanel = {
+        'tab-viewer': viewer,
+        'tab-pdf-svg': pdfSvgPanel,
+        'tab-graph': graphPanel,
+        'tab-pdf': pdfPanel
+    };
+
+    function activateTab(tab) {
+        tabs.forEach(function (t) {
+            var on = t === tab;
+            t.setAttribute('aria-selected', on ? 'true' : 'false');
+        });
+        Object.keys(tabToPanel).forEach(function (tid) {
+            var p = tabToPanel[tid];
+            var on = tab.id === tid;
+            p.classList.toggle('active', on);
+            p.hidden = !on;
+        });
+    }
+
+    tabs.forEach(function (t) {
+        t.addEventListener('click', function () { activateTab(t); });
+    });
+
+    if (location.hash === '#pdf-pipeline') {
+        var pdfTab = document.getElementById('tab-pdf');
+        if (pdfTab) activateTab(pdfTab);
+    }
+
+    var form = document.getElementById('graph-form');
+    var statusEl = document.getElementById('graph-status');
+    var errEl = document.getElementById('graph-err');
+    var resultsEl = document.getElementById('graph-results');
+
+    function showErr(msg) {
+        errEl.textContent = msg;
+        errEl.style.display = msg ? 'block' : 'none';
+    }
+
+    function renderPipeline(data) {
+        var parts = [];
+        function card(title, key, obj) {
+            parts.push('<details class="step-card" open>');
+            parts.push('<summary>' + title + '</summary>');
+            parts.push('<pre>' + escapeHtml(JSON.stringify(obj, null, 2)) + '</pre>');
+            parts.push('</details>');
+        }
+        var da = data.diagram_a;
+        card('Step 1 — Graph (A): nodes, edges, checks', 's1', da.step1_graph);
+        card('Step 2 — Analysis (A): metrics, degrees, neighbors, paths', 's2', da.step2_analysis);
+        card('Step 3 — Subgraphs / patterns (A)', 's3', da.step3_subgraphs);
+        card('Step 4 — Graph embedding (A)', 's5', da.step5_embedding);
+        card('Step 5 — ML / GNN POC (A)', 's6', da.step6_gnn_poc);
+        if (data.diagram_b) {
+            var db = data.diagram_b;
+            card('Step 1 — Graph (B)', 's1b', db.step1_graph);
+            card('Step 2 — Analysis (B)', 's2b', db.step2_analysis);
+            card('Step 3 — Subgraphs (B)', 's3b', db.step3_subgraphs);
+            card('Step 4 — Graph embedding (B)', 's5b', db.step5_embedding);
+            card('Step 5 — ML / GNN POC (B)', 's6b', db.step6_gnn_poc);
+        }
+        if (data.step4_similarity) {
+            card('Step 6 — Graph similarity (A vs B)', 's4', data.step4_similarity);
+        }
+        resultsEl.innerHTML = parts.join('');
+    }
+
+    function escapeHtml(s) {
+        var d = document.createElement('div');
+        d.textContent = s;
+        return d.innerHTML;
+    }
+
+    form.addEventListener('submit', function (e) {
+        e.preventDefault();
+        showErr('');
+        resultsEl.innerHTML = '';
+        var fa = document.getElementById('xml_a').files[0];
+        var fb = document.getElementById('xml_b').files[0];
+        if (!fa) {
+            showErr('Choose diagram A.');
+            return;
+        }
+        statusEl.textContent = 'Running pipeline…';
+        var fd = new FormData();
+        fd.append('xml_a', fa);
+        if (fb) fd.append('xml_b', fb);
+
+        fetch('/api/graph/analyze', { method: 'POST', body: fd })
+            .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
+            .then(function (x) {
+                statusEl.textContent = '';
+                if (!x.ok) {
+                    showErr(x.j.error || 'Request failed.');
+                    return;
+                }
+                renderPipeline(x.j);
+            })
+            .catch(function () {
+                statusEl.textContent = '';
+                showErr('Network error.');
+            });
+    });
+})();
+</script>
+
+<script>
+(function () {
+    var form = document.getElementById('pdf-svg-form');
+    if (!form) return;
+    var statusEl = document.getElementById('pdf-svg-status');
+    var errEl = document.getElementById('pdf-svg-err');
+    var previewEl = document.getElementById('pdf-svg-direct-preview');
+    var dlBtn = document.getElementById('btn-download-pdf-svg');
+    var lastSvg = null;
+    var apiUrl = "{{ url_for('api_pdf_svg_convert') }}";
+    var zoom = 1.0;
+    var zoomStateEl = document.getElementById('pdf-svg-zoom-state');
+
+    function applyZoom() {
+        var svg = previewEl.querySelector('svg');
+        if (!svg) return;
+        svg.style.transformOrigin = 'top left';
+        svg.style.transform = 'scale(' + zoom + ')';
+        svg.style.maxWidth = 'none';
+        zoomStateEl.textContent = Math.round(zoom * 100) + '%';
+    }
+
+    function changeZoom(delta) {
+        zoom = Math.max(0.2, Math.min(4, zoom + delta));
+        applyZoom();
+    }
+
+    document.getElementById('pdf-svg-zoom-in').addEventListener('click', function () { changeZoom(0.2); });
+    document.getElementById('pdf-svg-zoom-out').addEventListener('click', function () { changeZoom(-0.2); });
+    document.getElementById('pdf-svg-zoom-reset').addEventListener('click', function () {
+        zoom = 1.0;
+        applyZoom();
+    });
+
+    function showErr(msg) {
+        errEl.textContent = msg;
+        errEl.style.display = msg ? 'block' : 'none';
+    }
+
+    dlBtn.addEventListener('click', function () {
+        if (!lastSvg) return;
+        var blob = new Blob([lastSvg], { type: 'image/svg+xml;charset=utf-8' });
+        var url = URL.createObjectURL(blob);
+        var a = document.createElement('a');
+        a.href = url;
+        a.download = 'pdf_page.svg';
+        a.click();
+        URL.revokeObjectURL(url);
+    });
+
+    form.addEventListener('submit', function (e) {
+        e.preventDefault();
+        showErr('');
+        previewEl.innerHTML = '';
+        zoom = 1.0;
+        zoomStateEl.textContent = '100%';
+        dlBtn.style.display = 'none';
+        lastSvg = null;
+
+        var file = document.getElementById('pdf_svg_file').files[0];
+        if (!file) {
+            showErr('Choose a PDF file.');
+            return;
+        }
+        var fd = new FormData();
+        fd.append('pdf_file', file);
+        fd.append('page', document.getElementById('pdf_svg_page').value);
+        statusEl.textContent = 'Extracting SVG...';
+        fetch(apiUrl, { method: 'POST', body: fd })
+            .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
+            .then(function (x) {
+                statusEl.textContent = '';
+                if (!x.ok) {
+                    showErr(x.j.error || 'Request failed.');
+                    return;
+                }
+                lastSvg = x.j.svg || null;
+                if (!lastSvg) {
+                    showErr('No SVG returned.');
+                    return;
+                }
+                previewEl.innerHTML = lastSvg;
+                applyZoom();
+                dlBtn.style.display = 'inline-block';
+            })
+            .catch(function () {
+                statusEl.textContent = '';
+                showErr('Network error.');
+            });
+    });
+})();
+</script>
+
+<script>
+(function () {
+    var form = document.getElementById('pdf-form');
+    if (!form) return;
+
+    var statusEl = document.getElementById('pdf-status');
+    var errEl = document.getElementById('pdf-err');
+    var resultsEl = document.getElementById('pdf-results');
+    var previewWrap = document.getElementById('pdf-preview-wrap');
+    var pageImg = document.getElementById('pdf-page-img');
+    var debugWrap = document.getElementById('pdf-debug-wrap');
+    var debugImg = document.getElementById('pdf-debug-img');
+    var svgWrap = document.getElementById('pdf-svg-wrap');
+    var svgPreview = document.getElementById('pdf-svg-preview');
+    var pydexpiBanner = document.getElementById('pydexpi-banner');
+    var btnXml = document.getElementById('btn-pdf-xml');
+    var lastXml = null;
+    var pdfApiUrl = "{{ url_for('api_pdf_pipeline_process') }}";
+
+    function showErr(msg) {
+        errEl.textContent = msg;
+        errEl.style.display = msg ? 'block' : 'none';
+    }
+
+    function escapeHtml(s) {
+        var d = document.createElement('div');
+        d.textContent = s;
+        return d.innerHTML;
+    }
+
+    function card(title, obj) {
+        var j = JSON.stringify(obj, null, 2);
+        return '<details class="step-card" open><summary>' + escapeHtml(title) + '</summary><pre>' + escapeHtml(j) + '</pre></details>';
+    }
+
+    btnXml.addEventListener('click', function () {
+        if (!lastXml) return;
+        var blob = new Blob([lastXml], { type: 'application/xml;charset=utf-8' });
+        var url = URL.createObjectURL(blob);
+        var a = document.createElement('a');
+        a.href = url;
+        a.download = 'pid_from_pdf.xml';
+        a.click();
+        URL.revokeObjectURL(url);
+    });
+
+    form.addEventListener('submit', function (e) {
+        e.preventDefault();
+        showErr('');
+        resultsEl.innerHTML = '';
+        pydexpiBanner.style.display = 'none';
+        previewWrap.classList.remove('visible');
+        debugWrap.style.display = 'none';
+        svgWrap.classList.remove('visible');
+        svgPreview.innerHTML = '';
+        btnXml.style.display = 'none';
+        lastXml = null;
+
+        var pdfInput = document.getElementById('pdf_file');
+        var file = pdfInput.files[0];
+        if (!file) {
+            showErr('Choose a PDF file.');
+            return;
+        }
+
+        var fd = new FormData();
+        fd.append('pdf_file', file);
+        fd.append('page', document.getElementById('page').value);
+
+        statusEl.textContent = 'Running pipeline…';
+        fetch(pdfApiUrl, { method: 'POST', body: fd })
+            .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
+            .then(function (x) {
+                statusEl.textContent = '';
+                if (!x.ok) {
+                    showErr(x.j.error || 'Request failed.');
+                    return;
+                }
+                var d = x.j;
+                if (d.step_image && d.step_image.preview_base64) {
+                    pageImg.src = 'data:image/png;base64,' + d.step_image.preview_base64;
+                    previewWrap.classList.add('visible');
+                }
+                if (d.step_debug && d.step_debug.overlay_base64) {
+                    debugImg.src = 'data:image/png;base64,' + d.step_debug.overlay_base64;
+                    debugWrap.style.display = 'block';
+                }
+                if (d.step_svg && d.step_svg.rendered && d.step_svg.svg) {
+                    svgPreview.innerHTML = d.step_svg.svg;
+                    svgWrap.classList.add('visible');
+                }
+                lastXml = d.step_xml && d.step_xml.dexpi_like ? d.step_xml.dexpi_like : null;
+                if (lastXml) btnXml.style.display = 'inline-block';
+
+                var parts = [];
+                parts.push(card('PDF / raster meta', d.pdf_meta));
+                parts.push(card('Step — Image extraction', d.step_image));
+                if (d.step_debug) {
+                    parts.push(card('Step — Detection debug', d.step_debug));
+                }
+                parts.push(card('Step — Symbol detection', d.step_symbols));
+                parts.push(card('Step — Connection detection', d.step_connections));
+                parts.push(card('Step — Graph', d.step_graph));
+                parts.push(card('Step — pyDEXPI', d.step_pydexpi));
+                if (d.step_svg) {
+                    parts.push(card('Step — SVG render status', { rendered: d.step_svg.rendered, note: d.step_svg.note }));
+                }
+                if (d.step_xml && d.step_xml.dexpi_like) {
+                    parts.push(card('Step — DEXPI-like XML (full text)', { dexpi_like: d.step_xml.dexpi_like }));
+                }
+                resultsEl.innerHTML = parts.join('');
+
+                var pd = d.step_pydexpi;
+                if (pd) {
+                    pydexpiBanner.style.display = 'block';
+                    if (pd.loaded) {
+                        pydexpiBanner.innerHTML = '<span class="ok">pyDEXPI loaded.</span> Summary: <code>' + escapeHtml(JSON.stringify(pd.summary)) + '</code>';
+                    } else {
+                        pydexpiBanner.innerHTML = '<span class="bad">pyDEXPI did not load.</span> ' + escapeHtml(pd.error || '');
+                    }
+                }
+            })
+            .catch(function () {
+                statusEl.textContent = '';
+                showErr('Network error.');
+            });
+    });
+})();
+</script>
+
+</body>
+</html>

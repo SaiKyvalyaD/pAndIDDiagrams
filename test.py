@@ -1,6 +1,19 @@
 from pathlib import Path
 import xml.etree.ElementTree as ET
 
+
+def _local_name(tag: str) -> str:
+    if tag.startswith("{") and "}" in tag:
+        return tag.split("}", 1)[1]
+    return tag
+
+
+def _iter_local(root: ET.Element, name: str):
+    for el in root.iter():
+        if _local_name(el.tag) == name:
+            yield el
+
+
 try:
     from pydexpi.loaders import ProteusSerializer  # pyright: ignore[reportMissingImports]
 except ModuleNotFoundError:
@@ -18,11 +31,13 @@ def render_fallback_svg(xml_path: Path) -> str:
     root = tree.getroot()
 
     equipment_positions: dict[str, tuple[float, float, str]] = {}
-    for equipment in root.findall(".//Equipment"):
+    for equipment in _iter_local(root, "Equipment"):
         equipment_id = equipment.get("id")
         if not equipment_id:
             continue
-        position = equipment.find("Position")
+        position = next(
+            (c for c in equipment if _local_name(c.tag) == "Position"), None
+        )
         if position is None:
             continue
         x = float(position.get("x", "0"))
@@ -38,15 +53,16 @@ def render_fallback_svg(xml_path: Path) -> str:
     else:
         min_x, max_x, min_y, max_y = 0, 600, 0, 300
 
+    w, h = max_x - min_x, max_y - min_y
     lines: list[str] = [
         (
-            f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="{min_x} {min_y} '
-            f'{max_x - min_x} {max_y - min_y}">'
+            f'<svg xmlns="http://www.w3.org/2000/svg" width="{w}" height="{h}" '
+            f'viewBox="{min_x} {min_y} {w} {h}">'
         ),
-        '<rect width="100%" height="100%" fill="white"/>',
+        f'<rect x="{min_x}" y="{min_y}" width="{w}" height="{h}" fill="white"/>',
     ]
 
-    for connection in root.findall(".//Connection"):
+    for connection in _iter_local(root, "Connection"):
         from_id = connection.get("from")
         to_id = connection.get("to")
         if not from_id or not to_id:

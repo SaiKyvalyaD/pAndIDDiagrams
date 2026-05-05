@@ -1,39 +1,62 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<DEXPI>
+<!-- PlantModel as root, no default xmlns: pyDEXPI uses unprefixed ElementTree find/findall. -->
+<PlantModel id="PM1" name="Complex Plant">
+
   <PlantInformation
-    Date="2026-04-27"
-    Time="09:00:00"
-    OriginatingSystem="POC"
-    OriginatingSystemVendor="POC"
-    OriginatingSystemVersion="1.0"
-    SchemaVersion="4.1"
-    Application="Dexpi"
-    ApplicationVersion="1.3"
-  />
-  <PlantModel id="PM1" name="Simple Plant">
-    <PlantInformation
-      Date="2026-04-27"
-      Time="09:00:00"
-      OriginatingSystem="POC"
-      OriginatingSystemVendor="POC"
-      OriginatingSystemVersion="1.0"
       Application="Dexpi"
-      ApplicationVersion="1.3"
-    />
-    <!-- Equipment -->
-    <Equipment id="E1" name="Pump P1" type="Pump">
-      <Position x="100" y="100" />
-    </Equipment>
+      ApplicationVersion="1.3.1"
+      Discipline="PID"
+      Is3D="no"
+      SchemaVersion="4.1.1"
+      Units="mm"
+      Date="2026-04-27"
+      Time="12:00:00"
+      OriginatingSystem="POC"
+      OriginatingSystemVendor="pAndIDDiagrams"
+      OriginatingSystemVersion="0.1">
+    <UnitsOfMeasure/>
+  </PlantInformation>
 
-    <Equipment id="E2" name="Tank T1" type="Tank">
-      <Position x="300" y="100" />
-    </Equipment>
+  <!-- Equipment -->
+  <Equipment id="E1" name="Pump P1" type="Pump">
+    <Position x="100" y="200"/>
+  </Equipment>
 
-    <!-- Piping -->
-    <PipingNetworkSystem id="PNS1">
-      <PipingComponent id="PC1" type="Pipe">
-        <Connection from="E1" to="E2" />
-      </PipingComponent>
-    </PipingNetworkSystem>
-  </PlantModel>
-</DEXPI>
+  <Equipment id="E2" name="Valve V1" type="Valve">
+    <Position x="250" y="200"/>
+  </Equipment>
+
+  <Equipment id="E3" name="Tank T1" type="Tank">
+    <Position x="450" y="100"/>
+  </Equipment>
+
+  <Equipment id="E4" name="Tank T2" type="Tank">
+    <Position x="450" y="300"/>
+  </Equipment>
+
+  <Equipment id="E5" name="Sensor S1" type="Sensor">
+    <Position x="600" y="100"/>
+  </Equipment>
+
+  <!-- Piping Network -->
+  <PipingNetworkSystem id="PNS1">
+
+    <PipingComponent id="PC1" type="Pipe">
+      <Connection from="E1" to="E2"/>
+    </PipingComponent>
+
+    <PipingComponent id="PC2" type="Pipe">
+      <Connection from="E2" to="E3"/>
+    </PipingComponent>
+
+    <PipingComponent id="PC3" type="Pipe">
+      <Connection from="E2" to="E4"/>
+    </PipingComponent>
+
+    <PipingComponent id="PC4" type="Pipe">
+      <Connection from="E3" to="E5"/>
+    </PipingComponent>
+
+  </PipingNetworkSystem>
+
+</PlantModel>
