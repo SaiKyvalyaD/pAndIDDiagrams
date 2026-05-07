@@ -593,6 +593,35 @@ def render_simple_graph_svg(graph: dict[str, Any]) -> str:
     return "".join(out)
 
 
+def render_symbol_label_overlay_svg(
+    image_width: int,
+    image_height: int,
+    symbols: list[dict[str, Any]],
+) -> str:
+    """Render symbol bounding boxes and labels in original page coordinates."""
+    w = max(1, int(image_width))
+    h = max(1, int(image_height))
+    out = [
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{w}" height="{h}" viewBox="0 0 {w} {h}">',
+        f'<rect x="0" y="0" width="{w}" height="{h}" fill="white" opacity="0"/>',
+    ]
+    for i, s in enumerate(symbols, start=1):
+        x, y, bw, bh = [int(v) for v in s.get("bbox", [0, 0, 0, 0])]
+        label = str(s.get("label_text") or "").strip()
+        typ = str(s.get("type_guess") or "Unknown")
+        shown = label if label else f"{typ} {i}"
+        out.append(
+            f'<rect x="{x}" y="{y}" width="{bw}" height="{bh}" fill="none" stroke="#dc2626" stroke-width="2"/>'
+        )
+        tx = x
+        ty = max(12, y - 6)
+        out.append(
+            f'<text x="{tx}" y="{ty}" font-family="Arial,sans-serif" font-size="12" fill="#111827">{shown}</text>'
+        )
+    out.append("</svg>")
+    return "".join(out)
+
+
 def graph_to_dexpi_like_xml(graph: dict[str, Any], plant_name: str = "From PDF") -> str:
     """Emit minimal DEXPI-like PlantModel XML (matches sample.xml shape for pyDEXPI)."""
     root = ET.Element(
@@ -768,4 +797,11 @@ def run_pdf_page_pipeline(
         "step_xml": {"dexpi_like": xml_str},
         "step_pydexpi": pydexpi_block,
         "step_simple_graph_svg": {"svg": render_simple_graph_svg(graph_light)},
+        "step_symbol_overlay_svg": {
+            "svg": render_symbol_label_overlay_svg(
+                int(pdf_meta.get("width_px", 1)),
+                int(pdf_meta.get("height_px", 1)),
+                symbols,
+            )
+        },
     }

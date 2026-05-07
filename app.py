@@ -272,6 +272,50 @@ def api_pdf_svg_interpret():
         return jsonify({"error": str(exc)}), 500
 
     step_graph = parsed.get("step_graph") or {}
+    step_symbols = parsed.get("step_symbols") or {}
+    raw_symbols = step_symbols.get("symbols", []) if isinstance(step_symbols, dict) else []
+
+    unique_by_label: dict[str, dict[str, object]] = {}
+    detected_symbols: list[dict[str, object]] = []
+    for idx, s in enumerate(raw_symbols, start=1):
+        sym_type = str(s.get("type_guess") or "Unknown")
+        label_text = str(s.get("label_text") or "").strip()
+        sym_name = label_text or f"{sym_type} {idx}"
+        detected_symbols.append(
+            {
+                "id": f"S{idx}",
+                "name": sym_name,
+                "type": sym_type,
+                "label_text": label_text or None,
+                "bbox": s.get("bbox"),
+                "position": {"x": s.get("cx"), "y": s.get("cy")},
+                "confidence_proxy": {
+                    "shape": s.get("circularity"),
+                    "fill_ratio": s.get("fill_ratio"),
+                },
+            }
+        )
+        group_key = (label_text.lower() if label_text else f"__unlabeled__:{sym_type.lower()}")
+        slot = unique_by_label.setdefault(
+            group_key,
+            {
+                "label": label_text or None,
+                "type": sym_type,
+                "count": 0,
+                "example_names": [],
+            },
+        )
+        slot["count"] = int(slot["count"]) + 1
+        names = slot.get("example_names")
+        if isinstance(names, list) and sym_name not in names and len(names) < 5:
+            names.append(sym_name)
+
+    unique_symbols = sorted(
+        unique_by_label.values(),
+        key=lambda x: int(x.get("count", 0)),
+        reverse=True,
+    )
+
     obj = {
         "nodes": [
             {
@@ -292,6 +336,8 @@ def api_pdf_svg_interpret():
             for e in step_graph.get("edges", [])
         ],
         "quality": ((parsed.get("step_debug") or {}).get("quality") or {}),
+        "symbols": detected_symbols,
+        "unique_symbols": unique_symbols,
     }
 
     return jsonify(
@@ -300,7 +346,10 @@ def api_pdf_svg_interpret():
             "svg": svg,
             "parsed_object": obj,
             "simple_graph_svg": ((parsed.get("step_simple_graph_svg") or {}).get("svg")),
+            "symbol_overlay_svg": ((parsed.get("step_symbol_overlay_svg") or {}).get("svg")),
             "debug_overlay_base64": ((parsed.get("step_debug") or {}).get("overlay_base64")),
+            "unique_symbols": unique_symbols,
+            "detected_symbols": detected_symbols,
         }
     )
 

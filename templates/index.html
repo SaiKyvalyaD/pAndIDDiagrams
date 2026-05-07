@@ -34,6 +34,36 @@
             background: #fafafa;
             overflow: auto;
             margin-top: 1rem;
+            max-height: 55vh;
+        }
+        #pdf-svg-graph-preview svg { max-width: 100%; height: auto; display: block; }
+        #pdf-svg-symbol-overlay {
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 1rem;
+            background: #fafafa;
+            overflow: auto;
+            margin-top: 1rem;
+            max-height: 55vh;
+        }
+        #pdf-svg-symbol-overlay svg { max-width: 100%; height: auto; display: block; }
+        #pdf-svg-unique, #pdf-svg-object {
+            margin-top: 1rem;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 0.75rem 1rem;
+            background: #fff;
+            max-height: 360px;
+            overflow: auto;
+            font-size: 0.82rem;
+        }
+        #pdf-svg-graph-preview {
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 1rem;
+            background: #fafafa;
+            overflow: auto;
+            margin-top: 1rem;
             max-height: 72vh;
         }
         #pdf-svg-graph-preview svg { max-width: 100%; height: auto; display: block; }
@@ -230,6 +260,14 @@
         <span class="zoom-state" id="pdf-svg-zoom-state">100%</span>
     </div>
     <div id="pdf-svg-direct-preview"></div>
+    <h3>Unique symbols (grouped)</h3>
+    <pre id="pdf-svg-unique"></pre>
+    <h3>Symbol + label overlay</h3>
+    <div id="pdf-svg-symbol-overlay"></div>
+    <h3>Simple graph view</h3>
+    <div id="pdf-svg-graph-preview"></div>
+    <h3>Parsed object</h3>
+    <pre id="pdf-svg-object"></pre>
 </div>
 
 <div id="panel-graph" class="panel" role="tabpanel" aria-labelledby="tab-graph" hidden>
@@ -425,9 +463,13 @@ Convert → Graphs
     var statusEl = document.getElementById('pdf-svg-status');
     var errEl = document.getElementById('pdf-svg-err');
     var previewEl = document.getElementById('pdf-svg-direct-preview');
+    var uniqueEl = document.getElementById('pdf-svg-unique');
+    var symbolOverlayEl = document.getElementById('pdf-svg-symbol-overlay');
+    var graphEl = document.getElementById('pdf-svg-graph-preview');
+    var objectEl = document.getElementById('pdf-svg-object');
     var dlBtn = document.getElementById('btn-download-pdf-svg');
     var lastSvg = null;
-    var apiUrl = "{{ url_for('api_pdf_svg_convert') }}";
+    var apiUrl = "{{ url_for('api_pdf_svg_interpret') }}";
     var zoom = 1.0;
     var zoomStateEl = document.getElementById('pdf-svg-zoom-state');
 
@@ -472,6 +514,10 @@ Convert → Graphs
         e.preventDefault();
         showErr('');
         previewEl.innerHTML = '';
+        graphEl.innerHTML = '';
+        symbolOverlayEl.innerHTML = '';
+        uniqueEl.textContent = '';
+        objectEl.textContent = '';
         zoom = 1.0;
         zoomStateEl.textContent = '100%';
         dlBtn.style.display = 'none';
@@ -485,7 +531,7 @@ Convert → Graphs
         var fd = new FormData();
         fd.append('pdf_file', file);
         fd.append('page', document.getElementById('pdf_svg_page').value);
-        statusEl.textContent = 'Extracting SVG...';
+        statusEl.textContent = 'Extracting SVG and detecting symbols...';
         fetch(apiUrl, { method: 'POST', body: fd })
             .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
             .then(function (x) {
@@ -500,6 +546,10 @@ Convert → Graphs
                     return;
                 }
                 previewEl.innerHTML = lastSvg;
+                symbolOverlayEl.innerHTML = x.j.symbol_overlay_svg || '';
+                graphEl.innerHTML = x.j.simple_graph_svg || '';
+                uniqueEl.textContent = JSON.stringify(x.j.unique_symbols || [], null, 2);
+                objectEl.textContent = JSON.stringify(x.j.parsed_object || {}, null, 2);
                 applyZoom();
                 dlBtn.style.display = 'inline-block';
             })
