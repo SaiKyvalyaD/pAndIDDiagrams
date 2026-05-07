@@ -4,12 +4,23 @@ from __future__ import annotations
 
 import tempfile
 import xml.etree.ElementTree as ET
+import re
+import math
 from pathlib import Path
 
+import cv2
+import numpy as np
 from flask import Flask, jsonify, redirect, render_template, request, url_for
 
 from pid_graph import run_full_pipeline
-from pdf_pipeline import pdf_page_to_svg_string, run_pdf_page_pipeline
+from pdf_pipeline import (
+    _build_line_topology,
+    detect_line_segments_bgr,
+    pdf_page_to_png_bytes,
+    pdf_page_to_svg_string,
+    run_pdf_page_pipeline,
+    segment_drawing_area,
+)
 from test import render_fallback_svg
 
 try:
@@ -24,6 +35,300 @@ except ModuleNotFoundError:
 
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 48 * 1024 * 1024  # 48 MiB (PDF rasterization)
+
+
+def _to_float(value: object) -> float | None:
+    if value is None:
+        return None
+    try:
+        text = str(value).strip()
+        if not text:
+            return None
+        m = re.search(r"[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?", text)
+        if not m:
+            return None
+        return float(m.group(0))
+    except Exception:
+        return None
+
+
+def _quant_point(x: float, y: float, grid: float) -> tuple[int, int]:
+    g = max(1.0, grid)
+    return (int(round(x / g)), int(round(y / g)))
+
+
+def _estimate_visual_analytics_from_svg(svg_text: str, width_pt: float, height_pt: float) -> dict[str, object]:
+    def _extract_path_segments(d_attr: str) -> list[tuple[float, float, float, float]]:
+        segs: list[tuple[float, float, float, float]] = []
+        tokens = re.findall(r"[A-Za-z]|[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?", d_attr or "")
+        if not tokens:
+            return segs
+        i = 0
+        cmd = ""
+        cur_x = 0.0
+        cur_y = 0.0
+        start_x = 0.0
+        start_y = 0.0
+        while i < len(tokens):
+            tk = tokens[i]
+            if re.fullmatch(r"[A-Za-z]", tk):
+                cmd = tk
+                i += 1
+                if cmd in ("Z", "z"):
+                    segs.append((cur_x, cur_y, start_x, start_y))
+                    cur_x, cur_y = start_x, start_y
+                continue
+            if cmd in ("M", "L"):
+                if i + 1 >= len(tokens):
+                    break
+                nx = float(tokens[i])
+                ny = float(tokens[i + 1])
+                if cmd == "M":
+                    start_x, start_y = nx, ny
+                else:
+                    segs.append((cur_x, cur_y, nx, ny))
+                cur_x, cur_y = nx, ny
+                i += 2
+            elif cmd in ("m", "l"):
+                if i + 1 >= len(tokens):
+                    break
+                nx = cur_x + float(tokens[i])
+                ny = cur_y + float(tokens[i + 1])
+                if cmd == "m":
+                    start_x, start_y = nx, ny
+                else:
+                    segs.append((cur_x, cur_y, nx, ny))
+                cur_x, cur_y = nx, ny
+                i += 2
+            elif cmd in ("H",):
+                nx = float(tokens[i])
+                segs.append((cur_x, cur_y, nx, cur_y))
+                cur_x = nx
+                i += 1
+            elif cmd in ("h",):
+                nx = cur_x + float(tokens[i])
+                segs.append((cur_x, cur_y, nx, cur_y))
+                cur_x = nx
+                i += 1
+            elif cmd in ("V",):
+                ny = float(tokens[i])
+                segs.append((cur_x, cur_y, cur_x, ny))
+                cur_y = ny
+                i += 1
+            elif cmd in ("v",):
+                ny = cur_y + float(tokens[i])
+                segs.append((cur_x, cur_y, cur_x, ny))
+                cur_y = ny
+                i += 1
+            else:
+                i += 1
+        return segs
+
+    try:
+        root = ET.fromstring(svg_text)
+    except ET.ParseError:
+        line_count_fallback = len(re.findall(r"<\s*line\b", svg_text, flags=re.IGNORECASE))
+        path_count_fallback = len(re.findall(r"<\s*path\b", svg_text, flags=re.IGNORECASE))
+        text_count_fallback = len(re.findall(r"<\s*text\b", svg_text, flags=re.IGNORECASE))
+        return {
+            "line_count": line_count_fallback + path_count_fallback,
+            "line_element_count": line_count_fallback,
+            "path_count": path_count_fallback,
+            "text_count": text_count_fallback,
+            "junction_count": 0,
+            "connected_regions": 0,
+            "total_path_length": 0.0,
+            "note": "SVG XML parse failed; used regex element counts fallback.",
+        }
+
+    line_element_count = 0
+    path_count = 0
+    text_count = 0
+    segment_lengths: list[float] = []
+    adj: dict[tuple[int, int], set[tuple[int, int]]] = {}
+
+    diag = max(1.0, math.hypot(max(1.0, width_pt), max(1.0, height_pt)))
+    snap_grid = max(1.0, diag / 500.0)
+    point_split = re.compile(r"[,\s]+")
+
+    def add_edge(x1: float, y1: float, x2: float, y2: float) -> None:
+        p1 = _quant_point(x1, y1, snap_grid)
+        p2 = _quant_point(x2, y2, snap_grid)
+        if p1 == p2:
+            return
+        dx = x2 - x1
+        dy = y2 - y1
+        seg_len = math.hypot(dx, dy)
+        if seg_len <= 0:
+            return
+        segment_lengths.append(seg_len)
+        adj.setdefault(p1, set()).add(p2)
+        adj.setdefault(p2, set()).add(p1)
+
+    for elem in root.iter():
+        tag = elem.tag.split("}")[-1].lower()
+        if tag == "text":
+            text_count += 1
+
+        if tag == "line":
+            line_element_count += 1
+            x1 = _to_float(elem.attrib.get("x1"))
+            y1 = _to_float(elem.attrib.get("y1"))
+            x2 = _to_float(elem.attrib.get("x2"))
+            y2 = _to_float(elem.attrib.get("y2"))
+            if None not in (x1, y1, x2, y2):
+                add_edge(float(x1), float(y1), float(x2), float(y2))
+        elif tag == "path":
+            path_count += 1
+            for x1, y1, x2, y2 in _extract_path_segments(str(elem.attrib.get("d") or "")):
+                add_edge(x1, y1, x2, y2)
+        elif tag in ("polyline", "polygon"):
+            raw_points = str(elem.attrib.get("points") or "").strip()
+            if not raw_points:
+                continue
+            vals: list[float] = []
+            for tok in point_split.split(raw_points):
+                v = _to_float(tok)
+                if v is not None:
+                    vals.append(v)
+            if len(vals) < 4:
+                continue
+            pts = [(vals[i], vals[i + 1]) for i in range(0, len(vals) - 1, 2)]
+            for i in range(len(pts) - 1):
+                add_edge(pts[i][0], pts[i][1], pts[i + 1][0], pts[i + 1][1])
+            if tag == "polygon" and len(pts) > 2:
+                add_edge(pts[-1][0], pts[-1][1], pts[0][0], pts[0][1])
+        elif tag == "rect":
+            x = _to_float(elem.attrib.get("x")) or 0.0
+            y = _to_float(elem.attrib.get("y")) or 0.0
+            w = _to_float(elem.attrib.get("width")) or 0.0
+            h = _to_float(elem.attrib.get("height")) or 0.0
+            if w > 0 and h > 0:
+                add_edge(x, y, x + w, y)
+                add_edge(x + w, y, x + w, y + h)
+                add_edge(x + w, y + h, x, y + h)
+                add_edge(x, y + h, x, y)
+
+    line_count = len(segment_lengths)
+    degrees = [len(nbrs) for nbrs in adj.values()]
+    junction_count = sum(1 for d in degrees if d >= 3)
+
+    visited: set[tuple[int, int]] = set()
+    connected_regions = 0
+    for n in adj:
+        if n in visited:
+            continue
+        connected_regions += 1
+        stack = [n]
+        visited.add(n)
+        while stack:
+            cur = stack.pop()
+            for nxt in adj.get(cur, ()):
+                if nxt not in visited:
+                    visited.add(nxt)
+                    stack.append(nxt)
+
+    area = max(1.0, width_pt * height_pt)
+    total_path_length = sum(segment_lengths)
+
+    return {
+        "line_count": line_count,
+        "line_element_count": line_element_count,
+        "path_count": path_count,
+        "text_count": text_count,
+        "junction_count": junction_count,
+        "connected_regions": connected_regions,
+        "total_path_length": round(total_path_length, 2),
+        "line_density_per_1000pt2": round(line_count / (area / 1000.0), 3),
+        "text_density_per_1000pt2": round(text_count / (area / 1000.0), 3),
+    }
+
+
+def _estimate_visual_metrics_from_image(pdf_bytes: bytes, page_num: int, dpi: int = 300) -> dict[str, object]:
+    """
+    Extract level-1 measurable metrics from the rasterized page image.
+    """
+    png_bytes, _ = pdf_page_to_png_bytes(pdf_bytes, page_num, dpi=dpi)
+    arr = np.frombuffer(png_bytes, dtype=np.uint8)
+    img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+    if img is None:
+        return {
+            "line_count": 0,
+            "text_count": 0,
+            "junction_count": 0,
+            "connected_regions": 0,
+            "total_path_length": 0,
+            "note": "Image decode failed.",
+        }
+
+    roi, _seg_meta = segment_drawing_area(img)
+    roi_h, roi_w = roi.shape[:2]
+    roi_area_px = max(1, roi_h * roi_w)
+    segments = detect_line_segments_bgr(roi)
+    line_count = len(segments)
+    total_path_length = int(round(sum(float(s.get("length", 0.0)) for s in segments)))
+    avg_segment_length = round(total_path_length / max(1, line_count), 2)
+
+    topology = _build_line_topology(segments, roi.shape)
+    degrees = [len(nbrs) for nbrs in topology.values()]
+    junction_count = sum(1 for d in degrees if d >= 3)
+
+    visited: set[tuple[int, int]] = set()
+    connected_regions = 0
+    for n in topology:
+        if n in visited:
+            continue
+        connected_regions += 1
+        stack = [n]
+        visited.add(n)
+        while stack:
+            cur = stack.pop()
+            for nxt in topology.get(cur, ()):
+                if nxt not in visited:
+                    visited.add(nxt)
+                    stack.append(nxt)
+
+    text_count = 0
+    try:
+        from pdf_pipeline import pytesseract  # local optional dependency
+
+        if pytesseract is not None:
+            gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+            prep = cv2.adaptiveThreshold(
+                cv2.GaussianBlur(gray, (3, 3), 0),
+                255,
+                cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+                cv2.THRESH_BINARY,
+                31,
+                11,
+            )
+            data = pytesseract.image_to_data(
+                prep,
+                output_type=pytesseract.Output.DICT,
+                config="--oem 3 --psm 11",
+            )
+            confs = data.get("conf", [])
+            words = data.get("text", [])
+            text_count = sum(
+                1
+                for i, w in enumerate(words)
+                if str(w).strip() and i < len(confs) and float(confs[i]) >= 35.0
+            )
+    except Exception:
+        text_count = 0
+
+    return {
+        "line_count": int(line_count),
+        "text_count": int(text_count),
+        "junction_count": int(junction_count),
+        "connected_regions": int(connected_regions),
+        "total_path_length": int(total_path_length),
+        "avg_segment_length": avg_segment_length,
+        "line_density_per_mp": round(line_count / (roi_area_px / 1_000_000.0), 2),
+        "junction_density_per_mp": round(junction_count / (roi_area_px / 1_000_000.0), 2),
+        "roi_width_px": int(roi_w),
+        "roi_height_px": int(roi_h),
+    }
 
 
 def _load_model_from_xml_string(xml_data: str):
@@ -238,8 +543,7 @@ def api_pdf_svg_convert():
 @app.route("/api/pdf-svg/interpret", methods=["POST"])
 def api_pdf_svg_interpret():
     """
-    Multipart: pdf_file + page (1-based) -> visual SVG + extracted object graph.
-    Uses non-strict quality mode so results are returned for inspection.
+    Multipart: pdf_file + page (1-based) -> visual SVG + level-1 visual analytics.
     """
     f = request.files.get("pdf_file")
     if not f or not f.filename:
@@ -258,12 +562,6 @@ def api_pdf_svg_interpret():
 
     try:
         svg, meta = pdf_page_to_svg_string(pdf_bytes, page_num)
-        parsed = run_pdf_page_pipeline(
-            pdf_bytes,
-            page_num,
-            dpi=300,
-            strict_quality=False,
-        )
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 400
     except RuntimeError as exc:
@@ -271,85 +569,55 @@ def api_pdf_svg_interpret():
     except Exception as exc:
         return jsonify({"error": str(exc)}), 500
 
-    step_graph = parsed.get("step_graph") or {}
-    step_symbols = parsed.get("step_symbols") or {}
-    raw_symbols = step_symbols.get("symbols", []) if isinstance(step_symbols, dict) else []
-
-    unique_by_label: dict[str, dict[str, object]] = {}
-    detected_symbols: list[dict[str, object]] = []
-    for idx, s in enumerate(raw_symbols, start=1):
-        sym_type = str(s.get("type_guess") or "Unknown")
-        label_text = str(s.get("label_text") or "").strip()
-        sym_name = label_text or f"{sym_type} {idx}"
-        detected_symbols.append(
-            {
-                "id": f"S{idx}",
-                "name": sym_name,
-                "type": sym_type,
-                "label_text": label_text or None,
-                "bbox": s.get("bbox"),
-                "position": {"x": s.get("cx"), "y": s.get("cy")},
-                "confidence_proxy": {
-                    "shape": s.get("circularity"),
-                    "fill_ratio": s.get("fill_ratio"),
-                },
-            }
-        )
-        group_key = (label_text.lower() if label_text else f"__unlabeled__:{sym_type.lower()}")
-        slot = unique_by_label.setdefault(
-            group_key,
-            {
-                "label": label_text or None,
-                "type": sym_type,
-                "count": 0,
-                "example_names": [],
-            },
-        )
-        slot["count"] = int(slot["count"]) + 1
-        names = slot.get("example_names")
-        if isinstance(names, list) and sym_name not in names and len(names) < 5:
-            names.append(sym_name)
-
-    unique_symbols = sorted(
-        unique_by_label.values(),
-        key=lambda x: int(x.get("count", 0)),
-        reverse=True,
+    svg_metrics = _estimate_visual_analytics_from_svg(
+        svg,
+        float(meta.get("width_pt") or 0.0),
+        float(meta.get("height_pt") or 0.0),
     )
-
-    obj = {
-        "nodes": [
-            {
-                "id": n.get("id"),
-                "label": n.get("name") or n.get("id"),
-                "type": n.get("type"),
-                "position": n.get("position"),
-            }
-            for n in step_graph.get("nodes", [])
-        ],
-        "edges": [
-            {
-                "from": e.get("from"),
-                "to": e.get("to"),
-                "type": "connection",
-                "id": e.get("piping_component_id"),
-            }
-            for e in step_graph.get("edges", [])
-        ],
-        "quality": ((parsed.get("step_debug") or {}).get("quality") or {}),
-        "symbols": detected_symbols,
-        "unique_symbols": unique_symbols,
+    image_metrics = _estimate_visual_metrics_from_image(pdf_bytes, page_num, dpi=300)
+    metrics = {
+        "line_count": int(image_metrics.get("line_count", 0)),
+        "text_count": int(image_metrics.get("text_count", 0)),
+        "junction_count": int(image_metrics.get("junction_count", 0)),
+        "connected_regions": int(image_metrics.get("connected_regions", 0)),
+        "total_path_length": int(image_metrics.get("total_path_length", 0)),
+        "avg_segment_length": float(image_metrics.get("avg_segment_length", 0.0)),
+        "line_density_per_mp": float(image_metrics.get("line_density_per_mp", 0.0)),
+        "junction_density_per_mp": float(image_metrics.get("junction_density_per_mp", 0.0)),
+        "roi_width_px": int(image_metrics.get("roi_width_px", 0)),
+        "roi_height_px": int(image_metrics.get("roi_height_px", 0)),
+        "svg_line_elements": int(svg_metrics.get("line_element_count", 0)),
+        "svg_path_elements": int(svg_metrics.get("path_count", 0)),
     }
+    complexity_index = round(
+        (
+            min(metrics["line_count"] / 30.0, 40.0)
+            + min(metrics["junction_count"] * 0.35, 25.0)
+            + min(metrics["connected_regions"] * 0.8, 15.0)
+            + min(metrics["text_count"] / 20.0, 20.0)
+        ),
+        1,
+    )
 
     return jsonify(
         {
             "pdf_meta": meta,
             "svg": svg,
-            "parsed_object": obj,
-            "simple_graph_svg": ((parsed.get("step_simple_graph_svg") or {}).get("svg")),
-            "symbol_overlay_svg": ((parsed.get("step_symbol_overlay_svg") or {}).get("svg")),
-            "debug_overlay_base64": ((parsed.get("step_debug") or {}).get("overlay_base64")),
-            "unique_symbols": unique_symbols,
-            "detected_symbols": detected_symbols,
+            "metrics": metrics,
+            "complexity_index": complexity_index,
+            "metric_sources": {
+                "primary": "image",
+                "image_metrics": image_metrics,
+                "svg_metrics": svg_metrics,
+            },
+            "insights": {
+                "fragmentation_hint": (
+                    "High fragmentation" if int(metrics["connected_regions"]) >= 12 else "Moderate/low fragmentation"
+                ),
+                "complexity_hint": (
+                    "High visual complexity" if complexity_index >= 70 else "Moderate visual complexity"
+                ),
+            },
         }
     )
 

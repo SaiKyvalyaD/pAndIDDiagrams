@@ -718,7 +718,7 @@ def run_pdf_page_pipeline(
     dpi: int = 150,
     strict_quality: bool = True,
 ) -> dict[str, Any]:
-    """Full pipeline: PDF → image → symbols → lines → graph → XML → pydexpi."""
+    """Full pipeline: PDF  ---> image  ---> symbols  ---> lines  ---> graph  ---> XML  ---> pydexpi."""
     png_bytes, pdf_meta = pdf_page_to_png_bytes(pdf_bytes, page_number, dpi=dpi)
     arr = np.frombuffer(png_bytes, dtype=np.uint8)
     img = cv2.imdecode(arr, cv2.IMREAD_COLOR)

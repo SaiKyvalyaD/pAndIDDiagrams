@@ -27,27 +27,7 @@
             max-height: 72vh;
         }
         #pdf-svg-direct-preview svg { max-width: 100%; height: auto; display: block; }
-        #pdf-svg-graph-preview {
-            border: 1px solid var(--border);
-            border-radius: 8px;
-            padding: 1rem;
-            background: #fafafa;
-            overflow: auto;
-            margin-top: 1rem;
-            max-height: 55vh;
-        }
-        #pdf-svg-graph-preview svg { max-width: 100%; height: auto; display: block; }
-        #pdf-svg-symbol-overlay {
-            border: 1px solid var(--border);
-            border-radius: 8px;
-            padding: 1rem;
-            background: #fafafa;
-            overflow: auto;
-            margin-top: 1rem;
-            max-height: 55vh;
-        }
-        #pdf-svg-symbol-overlay svg { max-width: 100%; height: auto; display: block; }
-        #pdf-svg-unique, #pdf-svg-object {
+        #pdf-svg-analytics, #pdf-svg-insights {
             margin-top: 1rem;
             border: 1px solid var(--border);
             border-radius: 8px;
@@ -57,16 +37,6 @@
             overflow: auto;
             font-size: 0.82rem;
         }
-        #pdf-svg-graph-preview {
-            border: 1px solid var(--border);
-            border-radius: 8px;
-            padding: 1rem;
-            background: #fafafa;
-            overflow: auto;
-            margin-top: 1rem;
-            max-height: 72vh;
-        }
-        #pdf-svg-graph-preview svg { max-width: 100%; height: auto; display: block; }
         .zoom-toolbar {
             display: flex;
             gap: 0.5rem;
@@ -78,16 +48,6 @@
             color: var(--muted);
             font-size: 0.9rem;
             min-width: 4rem;
-        }
-        #pdf-svg-object {
-            margin-top: 1rem;
-            border: 1px solid var(--border);
-            border-radius: 8px;
-            padding: 0.75rem 1rem;
-            background: #fff;
-            max-height: 420px;
-            overflow: auto;
-            font-size: 0.8rem;
         }
         button, .btn { margin-top: 0.5rem; margin-right: 0.5rem; padding: 0.5rem 1rem; cursor: pointer; }
         .tabs { display: flex; gap: 0; border-bottom: 2px solid var(--border); margin: 1.25rem 0 0; flex-wrap: wrap; }
@@ -188,9 +148,9 @@
 
 <div class="tabs" role="tablist">
     <button type="button" role="tab" id="tab-viewer" aria-selected="true" aria-controls="panel-viewer">Diagram viewer</button>
-    <button type="button" role="tab" id="tab-pdf-svg" aria-selected="false" aria-controls="panel-pdf-svg">PDF → SVG</button>
+    <button type="button" role="tab" id="tab-pdf-svg" aria-selected="false" aria-controls="panel-pdf-svg">PDF  ---> SVG</button>
     <button type="button" role="tab" id="tab-graph" aria-selected="false" aria-controls="panel-graph">Graph interpretation</button>
-    <button type="button" role="tab" id="tab-pdf" aria-selected="false" aria-controls="panel-pdf">PDF → pyDEXPI</button>
+    <button type="button" role="tab" id="tab-pdf" aria-selected="false" aria-controls="panel-pdf">PDF  ---> pyDEXPI</button>
 </div>
 
 <div id="panel-viewer" class="panel active" role="tabpanel" aria-labelledby="tab-viewer">
@@ -260,23 +220,19 @@
         <span class="zoom-state" id="pdf-svg-zoom-state">100%</span>
     </div>
     <div id="pdf-svg-direct-preview"></div>
-    <h3>Unique symbols (grouped)</h3>
-    <pre id="pdf-svg-unique"></pre>
-    <h3>Symbol + label overlay</h3>
-    <div id="pdf-svg-symbol-overlay"></div>
-    <h3>Simple graph view</h3>
-    <div id="pdf-svg-graph-preview"></div>
-    <h3>Parsed object</h3>
-    <pre id="pdf-svg-object"></pre>
+    <h3>Level-1 visual analytics</h3>
+    <pre id="pdf-svg-analytics"></pre>
+    <h3>Insights</h3>
+    <pre id="pdf-svg-insights"></pre>
 </div>
 
 <div id="panel-graph" class="panel" role="tabpanel" aria-labelledby="tab-graph" hidden>
     <p class="pipeline-intro">
-        <strong>Pipeline (POC):</strong> P&amp;ID XML → structured graph → analytics → patterns → similarity (optional second file) → embedding → lightweight ML-style labels.
+        <strong>Pipeline (POC):</strong> P&amp;ID XML  ---> structured graph  ---> analytics  ---> patterns  ---> similarity (optional second file)  ---> embedding  ---> lightweight ML-style labels.
     </p>
     <div class="pipeline-flow">Upload XML A + XML B (optional)
         ↓
-Convert → Graphs
+Convert  ---> Graphs
         ↓
 [1] Graph analysis
         ↓
@@ -463,10 +419,8 @@ Convert → Graphs
     var statusEl = document.getElementById('pdf-svg-status');
     var errEl = document.getElementById('pdf-svg-err');
     var previewEl = document.getElementById('pdf-svg-direct-preview');
-    var uniqueEl = document.getElementById('pdf-svg-unique');
-    var symbolOverlayEl = document.getElementById('pdf-svg-symbol-overlay');
-    var graphEl = document.getElementById('pdf-svg-graph-preview');
-    var objectEl = document.getElementById('pdf-svg-object');
+    var analyticsEl = document.getElementById('pdf-svg-analytics');
+    var insightsEl = document.getElementById('pdf-svg-insights');
     var dlBtn = document.getElementById('btn-download-pdf-svg');
     var lastSvg = null;
     var apiUrl = "{{ url_for('api_pdf_svg_interpret') }}";
@@ -514,10 +468,8 @@ Convert → Graphs
         e.preventDefault();
         showErr('');
         previewEl.innerHTML = '';
-        graphEl.innerHTML = '';
-        symbolOverlayEl.innerHTML = '';
-        uniqueEl.textContent = '';
-        objectEl.textContent = '';
+        analyticsEl.textContent = '';
+        insightsEl.textContent = '';
         zoom = 1.0;
         zoomStateEl.textContent = '100%';
         dlBtn.style.display = 'none';
@@ -531,7 +483,7 @@ Convert → Graphs
         var fd = new FormData();
         fd.append('pdf_file', file);
         fd.append('page', document.getElementById('pdf_svg_page').value);
-        statusEl.textContent = 'Extracting SVG and detecting symbols...';
+        statusEl.textContent = 'Extracting SVG and computing level-1 visual analytics...';
         fetch(apiUrl, { method: 'POST', body: fd })
             .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
             .then(function (x) {
@@ -546,10 +498,12 @@ Convert → Graphs
                     return;
                 }
                 previewEl.innerHTML = lastSvg;
-                symbolOverlayEl.innerHTML = x.j.symbol_overlay_svg || '';
-                graphEl.innerHTML = x.j.simple_graph_svg || '';
-                uniqueEl.textContent = JSON.stringify(x.j.unique_symbols || [], null, 2);
-                objectEl.textContent = JSON.stringify(x.j.parsed_object || {}, null, 2);
+                analyticsEl.textContent = JSON.stringify({
+                    complexity_index: x.j.complexity_index || 0,
+                    metrics: x.j.metrics || {},
+                    metric_sources: x.j.metric_sources || {}
+                }, null, 2);
+                insightsEl.textContent = JSON.stringify(x.j.insights || {}, null, 2);
                 applyZoom();
                 dlBtn.style.display = 'inline-block';
             })

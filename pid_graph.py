@@ -1,4 +1,4 @@
-"""P&ID XML → graph structure, analysis, subgraphs, similarity, and ML-ready features (POC)."""
+"""P&ID XML  ---> graph structure, analysis, subgraphs, similarity, and ML-ready features (POC)."""
 
 from __future__ import annotations
 
@@ -21,7 +21,7 @@ def _iter_local(root: ET.Element, name: str):
 
 
 def build_graph_from_xml(xml_data: str) -> dict[str, Any]:
-    """Step 1: Parse XML → nodes (equipment) and edges (connections)."""
+    """Step 1: Parse XML  ---> nodes (equipment) and edges (connections)."""
     root = ET.fromstring(xml_data)
 
     nodes: list[dict[str, Any]] = []
